@@ -1,0 +1,873 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Watermark Lens Viewer</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #0f1115;
+    --panel: #171a21;
+    --panel-border: #2a2e38;
+    --text: #e6e8ec;
+    --text-dim: #9aa1ad;
+    --accent: #4fa8ff;
+    /* Okabe-Ito colorblind-safe palette - distinguishable under all common forms of color
+       vision deficiency. Shapes differ too (never color alone): watermark is a line with dots,
+       on-time is an upward triangle, late-update a downward triangle, late-drop a diamond. */
+    --watermark: #56B4E9;
+    --ontime: #009E73;
+    --late: #E69F00;
+    --latedrop: #D55E00;
+    --bucket: #999999;
+    --grid: #262b35;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+  header {
+    padding: 20px 24px 12px;
+    border-bottom: 1px solid var(--panel-border);
+  }
+  header h1 {
+    margin: 0 0 4px;
+    font-size: 20px;
+    font-weight: 600;
+  }
+  header p {
+    margin: 0;
+    color: var(--text-dim);
+    font-size: 13px;
+  }
+  main {
+    padding: 20px 24px 40px;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+
+  #dropzone {
+    border: 2px dashed var(--panel-border);
+    border-radius: 10px;
+    padding: 36px;
+    text-align: center;
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  #dropzone.drag {
+    border-color: var(--accent);
+    background: rgba(79, 168, 255, 0.06);
+  }
+  #dropzone strong { color: var(--text); }
+  #fileInput { display: none; }
+
+  #app { display: none; }
+  #app.visible { display: block; }
+
+  .toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin: 20px 0 14px;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .toolbar .filename {
+    color: var(--text-dim);
+    font-size: 13px;
+  }
+
+  .btn {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    color: var(--text);
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .btn:hover { border-color: var(--accent); }
+  .btn[hidden] { display: none; }
+
+  .text-btn {
+    background: none;
+    border: none;
+    color: var(--accent);
+    font-size: 12px;
+    cursor: pointer;
+    padding: 0;
+    text-decoration: underline;
+  }
+  .text-btn[hidden] { display: none; }
+
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+    gap: 10px;
+    margin-bottom: 20px;
+  }
+  .stat {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    padding: 10px 14px;
+  }
+  .stat .value { font-size: 20px; font-weight: 600; }
+  .stat .label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.04em; }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    padding: 16px;
+    margin-bottom: 20px;
+  }
+  .panel h2 {
+    margin: 0 0 10px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .legend {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    flex-wrap: wrap;
+    margin-bottom: 4px;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend svg { flex: none; overflow: visible; }
+  .legend .text-btn { margin-left: auto; }
+
+  .explainer {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 10px;
+    margin: 4px 0 16px;
+  }
+  .explainer[hidden] { display: none; }
+  .explainer .item {
+    font-size: 12px;
+    color: var(--text-dim);
+    line-height: 1.5;
+  }
+  .explainer .item strong { color: var(--text); }
+  .explainer .axis-note { grid-column: 1 / -1; }
+
+  .zoom-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 8px;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+
+  #chart { width: 100%; height: 360px; display: block; overflow: visible; cursor: crosshair; }
+  #chart .axis-label { fill: var(--text-dim); font-size: 10px; }
+  #chart .gridline { stroke: var(--grid); stroke-width: 1; }
+  #chart .watermark-line { fill: none; stroke: var(--watermark); stroke-width: 1.5; }
+  #chart .watermark-dot { fill: var(--watermark); }
+  #chart .bucket-bar { fill: var(--bucket); opacity: 0.6; }
+  #chart .marker { cursor: default; }
+  #chart .zoom-selection { fill: rgba(79,168,255,0.15); stroke: var(--accent); stroke-width: 1; pointer-events: none; }
+
+  #tooltip {
+    position: fixed;
+    display: none;
+    pointer-events: none;
+    background: #0a0c10;
+    border: 1px solid var(--panel-border);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 12px;
+    color: var(--text);
+    z-index: 1000;
+    max-width: 320px;
+    white-space: pre-line;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  }
+
+  .filters {
+    display: flex;
+    gap: 18px;
+    flex-wrap: wrap;
+    align-items: center;
+    font-size: 13px;
+  }
+  .filters label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+  .filters input[type="search"] {
+    background: var(--bg);
+    border: 1px solid var(--panel-border);
+    color: var(--text);
+    padding: 5px 10px;
+    border-radius: 6px;
+    font-size: 13px;
+    min-width: 180px;
+  }
+  .filter-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .filter-group-label {
+    color: var(--text-dim);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  thead th {
+    text-align: left;
+    color: var(--text-dim);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    font-size: 10.5px;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--panel-border);
+    position: sticky;
+    top: 0;
+    background: var(--panel);
+  }
+  tbody td {
+    padding: 5px 8px;
+    border-bottom: 1px solid var(--grid);
+    white-space: nowrap;
+  }
+  tbody tr:hover { background: rgba(255,255,255,0.03); }
+  .type-pill {
+    display: inline-block;
+    padding: 1px 7px;
+    border-radius: 10px;
+    font-size: 10.5px;
+    font-weight: 600;
+  }
+  .type-watermark { background: rgba(86,180,233,0.18); color: var(--watermark); }
+  .type-event_bucket { background: rgba(153,153,153,0.25); color: #c4c4c4; }
+  .type-window_fired { background: rgba(0,158,115,0.18); color: var(--ontime); }
+  .type-late_drop { background: rgba(213,94,0,0.18); color: var(--latedrop); }
+  .firing-LATE_UPDATE { color: var(--late); font-weight: 600; }
+
+  #tableWrap { max-height: 480px; overflow: auto; }
+  .empty { color: var(--text-dim); font-size: 13px; padding: 20px; text-align: center; }
+  .table-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 10px;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+  .table-footer[hidden] { display: none; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Watermark Lens Viewer</h1>
+  <p>Load a JSONL file produced by <code>WatermarkLens.jsonlSink(...)</code> to inspect watermark advances, window firings, and late-dropped data. Everything runs locally in your browser - nothing is uploaded anywhere.</p>
+</header>
+
+<main>
+  <div id="dropzone">
+    <div><strong>Drop a .jsonl file here</strong>, or click to choose one.</div>
+    <div style="margin-top:6px;font-size:12px;">Multiple files are fine - drop/select them all at once (e.g. the part-files from one bucket).</div>
+  </div>
+  <input type="file" id="fileInput" accept=".jsonl,.json,.txt" multiple>
+
+  <div id="app">
+    <div class="toolbar">
+      <div class="filename" id="filename"></div>
+      <button id="loadAnother" class="btn">Load different file(s)</button>
+    </div>
+
+    <div class="stats" id="stats"></div>
+
+    <div class="panel">
+      <h2>Filters</h2>
+      <div class="filters">
+        <div class="filter-group">
+          <span class="filter-group-label">Type:</span>
+          <label><input type="checkbox" class="typeFilter" value="watermark" checked> watermark</label>
+          <label><input type="checkbox" class="typeFilter" value="event_bucket" checked> event_bucket</label>
+          <label><input type="checkbox" class="typeFilter" value="window_fired" checked> window_fired</label>
+          <label><input type="checkbox" class="typeFilter" value="late_drop" checked> late_drop</label>
+        </div>
+        <div class="filter-group">
+          <span class="filter-group-label">Operator:</span>
+          <span id="operatorFilterGroup"></span>
+        </div>
+        <input type="search" id="search" placeholder="Filter by operator, key, runId...">
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Timeline</h2>
+      <div class="legend">
+        <span><svg width="16" height="10"><line x1="1" y1="5" x2="15" y2="5" stroke="var(--watermark)" stroke-width="2"/><circle cx="8" cy="5" r="2.5" fill="var(--watermark)"/></svg> watermark advance</span>
+        <span><svg width="10" height="10"><polygon points="5,0 10,9 0,9" fill="var(--ontime)"/></svg> window fired (on time)</span>
+        <span><svg width="10" height="10"><polygon points="0,0 10,0 5,9" fill="var(--late)"/></svg> window fired (late update)</span>
+        <span><svg width="10" height="10"><polygon points="5,0 10,5 5,10 0,5" fill="var(--latedrop)"/></svg> late drop</span>
+        <span><svg width="10" height="10"><rect width="10" height="10" fill="var(--bucket)"/></svg> event bucket count</span>
+        <button id="toggleExplainer" class="text-btn">Hide explanations</button>
+      </div>
+      <div class="explainer" id="explainer">
+        <div class="item axis-note"><strong>Reading this chart:</strong> the X-axis is wall-clock time - when each event was actually recorded. The Y-axis is a watermark <em>value</em>, which happens to be a timestamp too, but a different one - it's not "now," it's event-time progress. A marker that doesn't sit exactly on the blue line isn't a bug: it usually came from a different operator (or a different parallel subtask) than whatever's currently drawn as the line, reporting its own watermark as observed at its own point in the pipeline.</div>
+        <div class="item"><strong>Watermark advance</strong> - Flink's estimate of "no more event-time data older than this is coming." Everything else is measured relative to it.</div>
+        <div class="item"><strong>Window fired (on time)</strong> - your window function ran because the watermark passed the window's end.</div>
+        <div class="item"><strong>Window fired (late update)</strong> - a late element arrived within <code>allowedLateness</code>, so the window re-ran with the updated element set.</div>
+        <div class="item"><strong>Late drop</strong> - an element arrived too late even for <code>allowedLateness</code> and was discarded without ever reaching your window function.</div>
+        <div class="item"><strong>Event bucket count</strong> - how many elements passed through the tap in each ~1s sampling window, regardless of whether they were late.</div>
+      </div>
+      <div class="zoom-controls">
+        <button id="resetZoom" class="btn" hidden>Reset zoom</button>
+        <span>Drag on the chart to zoom into a time range.</span>
+      </div>
+      <svg id="chart"></svg>
+      <div id="tooltip"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Events</h2>
+      <div id="tableWrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Wall Time</th>
+              <th>Type</th>
+              <th>Operator</th>
+              <th>Subtask</th>
+              <th>Details</th>
+            </tr>
+          </thead>
+          <tbody id="tbody"></tbody>
+        </table>
+        <div class="empty" id="emptyMsg" style="display:none;">No events match the current filters.</div>
+      </div>
+      <div class="table-footer" id="tableFooter" hidden>
+        <span id="tableFooterText"></span>
+        <button id="showMore" class="text-btn" hidden>Show more</button>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  /** @typedef {{type:string, raw:Object, envelope:Object, wallTime:number}} ViewerEvent */
+
+  const dropzone = document.getElementById("dropzone");
+  const fileInput = document.getElementById("fileInput");
+  const app = document.getElementById("app");
+  const filenameEl = document.getElementById("filename");
+  const statsEl = document.getElementById("stats");
+  const tbody = document.getElementById("tbody");
+  const emptyMsg = document.getElementById("emptyMsg");
+  const tableFooter = document.getElementById("tableFooter");
+  const tableFooterText = document.getElementById("tableFooterText");
+  const showMoreBtn = document.getElementById("showMore");
+  const searchInput = document.getElementById("search");
+  const typeFilters = Array.from(document.querySelectorAll(".typeFilter"));
+  const operatorFilterGroup = document.getElementById("operatorFilterGroup");
+  const explainerEl = document.getElementById("explainer");
+  const toggleExplainerBtn = document.getElementById("toggleExplainer");
+  const resetZoomBtn = document.getElementById("resetZoom");
+  const chart = document.getElementById("chart");
+  const tooltip = document.getElementById("tooltip");
+
+  const EXPLAINER_KEY = "wmlens-viewer:explainerVisible";
+  const TABLE_PAGE_SIZE = 500;
+  const MAX_CHART_MARKERS = 1500;
+
+  /** @type {ViewerEvent[]} */
+  let events = [];
+  // Selected time range to zoom the chart into, or null for the full (filtered) range.
+  let zoomRange = null;
+  // How many matching table rows to render before requiring "Show more".
+  let tableRowLimit = TABLE_PAGE_SIZE;
+  // Current chart plot geometry, read by the zoom-brush handlers; null when there's nothing
+  // plotted to brush over. Updated once per renderChart() call, not per listener attach, so the
+  // mousedown/mousemove/mouseup listeners below are only ever attached once.
+  let plotGeom = null;
+
+  dropzone.addEventListener("click", () => fileInput.click());
+  dropzone.addEventListener("dragover", (e) => { e.preventDefault(); dropzone.classList.add("drag"); });
+  dropzone.addEventListener("dragleave", () => dropzone.classList.remove("drag"));
+  dropzone.addEventListener("drop", (e) => {
+    e.preventDefault();
+    dropzone.classList.remove("drag");
+    if (e.dataTransfer.files.length) loadFiles(e.dataTransfer.files);
+  });
+  fileInput.addEventListener("change", () => {
+    if (fileInput.files.length) loadFiles(fileInput.files);
+  });
+  document.getElementById("loadAnother").addEventListener("click", () => {
+    app.classList.remove("visible");
+    fileInput.value = "";
+  });
+  searchInput.addEventListener("input", rerenderAll);
+  typeFilters.forEach((cb) => cb.addEventListener("change", rerenderAll));
+  resetZoomBtn.addEventListener("click", () => { zoomRange = null; renderChart(); });
+  showMoreBtn.addEventListener("click", () => { tableRowLimit += TABLE_PAGE_SIZE; renderTable(); });
+
+  function getStoredExplainerVisible() {
+    try {
+      const stored = localStorage.getItem(EXPLAINER_KEY);
+      return stored === null ? true : stored === "true";
+    } catch (err) {
+      return true; // private browsing / storage disabled - default to visible
+    }
+  }
+  function setExplainerVisible(visible) {
+    explainerEl.hidden = !visible;
+    toggleExplainerBtn.textContent = visible ? "Hide explanations" : "Show explanations";
+    try { localStorage.setItem(EXPLAINER_KEY, String(visible)); } catch (err) { /* ignore */ }
+  }
+  toggleExplainerBtn.addEventListener("click", () => setExplainerVisible(explainerEl.hidden));
+  setExplainerVisible(getStoredExplainerVisible());
+
+  function rerenderAll() {
+    tableRowLimit = TABLE_PAGE_SIZE;
+    renderChart();
+    renderTable();
+  }
+
+  function loadFiles(fileList) {
+    const files = Array.from(fileList);
+    const readers = files.map(readFileAsText);
+    Promise.all(readers).then((contents) => {
+      events = [];
+      contents.forEach((text) => parseJsonl(text));
+      events.sort((a, b) => a.wallTime - b.wallTime);
+      filenameEl.textContent = files.map((f) => f.name).join(", ") + ` (${events.length} events)`;
+      app.classList.add("visible");
+      zoomRange = null;
+      tableRowLimit = TABLE_PAGE_SIZE;
+      renderOperatorFilters();
+      renderStats();
+      renderChart();
+      renderTable();
+    });
+  }
+
+  function readFileAsText(file) {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.readAsText(file);
+    });
+  }
+
+  function parseJsonl(text) {
+    const lines = text.split("\n");
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const raw = JSON.parse(trimmed);
+        if (!raw.type || !raw.envelope) continue;
+        events.push({ type: raw.type, raw, envelope: raw.envelope, wallTime: raw.envelope.wallTime });
+      } catch (err) {
+        // skip malformed/partial lines (e.g. a truncated in-progress write)
+      }
+    }
+  }
+
+  function renderOperatorFilters() {
+    const operators = Array.from(new Set(events.map((e) => e.envelope.operator))).sort();
+    operatorFilterGroup.innerHTML = operators.map((op) => `
+      <label><input type="checkbox" class="operatorFilter" value="${op}" checked> ${op}</label>
+    `).join("");
+    Array.from(operatorFilterGroup.querySelectorAll(".operatorFilter")).forEach((cb) => {
+      cb.addEventListener("change", rerenderAll);
+    });
+  }
+
+  function getFilteredEvents() {
+    const activeTypes = new Set(typeFilters.filter((cb) => cb.checked).map((cb) => cb.value));
+    const activeOperators = new Set(
+      Array.from(operatorFilterGroup.querySelectorAll(".operatorFilter")).filter((cb) => cb.checked).map((cb) => cb.value)
+    );
+    const query = searchInput.value.trim().toLowerCase();
+    return events.filter((e) => {
+      if (!activeTypes.has(e.type)) return false;
+      if (!activeOperators.has(e.envelope.operator)) return false;
+      if (!query) return true;
+      const haystack = [e.envelope.operator, e.envelope.runId, e.raw.key].filter(Boolean).join(" ").toLowerCase();
+      return haystack.includes(query);
+    });
+  }
+
+  function renderStats() {
+    const counts = { watermark: 0, event_bucket: 0, window_fired: 0, late_drop: 0 };
+    let lateUpdateCount = 0;
+    const operators = new Set();
+    const runIds = new Set();
+    for (const e of events) {
+      counts[e.type] = (counts[e.type] || 0) + 1;
+      operators.add(e.envelope.operator);
+      runIds.add(e.envelope.runId);
+      if (e.type === "window_fired" && e.raw.firing === "LATE_UPDATE") lateUpdateCount++;
+    }
+    const span = events.length ? events[events.length - 1].wallTime - events[0].wallTime : 0;
+
+    const stat = (value, label) => `<div class="stat"><div class="value">${value}</div><div class="label">${label}</div></div>`;
+    statsEl.innerHTML = [
+      stat(events.length, "Total events"),
+      stat(counts.watermark, "Watermark advances"),
+      stat(counts.window_fired, "Windows fired"),
+      stat(lateUpdateCount, "Late updates"),
+      stat(counts.late_drop, "Late drops"),
+      stat(operators.size, "Operators"),
+      stat(runIds.size, "Runs"),
+      stat(formatDuration(span), "Time span"),
+    ].join("");
+  }
+
+  function formatDuration(ms) {
+    if (ms < 1000) return ms + "ms";
+    const s = Math.floor(ms / 1000);
+    if (s < 60) return s + "s";
+    const m = Math.floor(s / 60);
+    const rem = s % 60;
+    return `${m}m ${rem}s`;
+  }
+
+  function formatTime(ms) {
+    return new Date(ms).toLocaleTimeString(undefined, { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  }
+
+  // Math.min/max(...arr) spreads the whole array as call arguments, which can blow the engine's
+  // argument-count limit on a large real capture - exactly the case this function exists for.
+  function minOf(arr) {
+    let m = Infinity;
+    for (const v of arr) if (v < m) m = v;
+    return m;
+  }
+  function maxOf(arr) {
+    let m = -Infinity;
+    for (const v of arr) if (v > m) m = v;
+    return m;
+  }
+
+  // Thins a series down to at most `max` elements by taking an even stride through it, so a
+  // huge capture doesn't turn into one DOM element (+ tooltip listeners) per data point. Only
+  // ever used for which individual markers get drawn - axis domains and the watermark line
+  // itself always use the full, non-strided data.
+  function strided(arr, max) {
+    if (arr.length <= max) return arr;
+    const stride = Math.ceil(arr.length / max);
+    const out = [];
+    for (let i = 0; i < arr.length; i += stride) out.push(arr[i]);
+    return out;
+  }
+
+  function svgEl(tag, attrs) {
+    const el = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    for (const k in attrs) el.setAttribute(k, attrs[k]);
+    return el;
+  }
+
+  function attachTooltip(el, text) {
+    el.classList.add("marker");
+    el.addEventListener("mousemove", (ev) => {
+      tooltip.textContent = text;
+      tooltip.style.display = "block";
+      tooltip.style.left = (ev.clientX + 14) + "px";
+      tooltip.style.top = (ev.clientY + 14) + "px";
+    });
+    el.addEventListener("mouseleave", () => { tooltip.style.display = "none"; });
+  }
+
+  function emptyChartMessage(width, height, text) {
+    chart.setAttribute("viewBox", `0 0 ${width} ${height}`);
+    const msg = svgEl("text", {
+      x: width / 2, y: height / 2, "text-anchor": "middle",
+      fill: "var(--text-dim)", "font-size": "13",
+    });
+    msg.textContent = text;
+    chart.appendChild(msg);
+  }
+
+  function renderChart() {
+    chart.innerHTML = "";
+    resetZoomBtn.hidden = !zoomRange;
+
+    const width = chart.clientWidth || 1100;
+    const height = 360;
+
+    const filtered = getFilteredEvents();
+    const chartEvents = zoomRange
+      ? filtered.filter((e) => e.wallTime >= zoomRange.start && e.wallTime <= zoomRange.end)
+      : filtered;
+
+    if (chartEvents.length === 0) {
+      plotGeom = null;
+      emptyChartMessage(width, height, zoomRange ? "No events in the selected time range." : "No events match the current filters.");
+      return;
+    }
+
+    chart.setAttribute("viewBox", `0 0 ${width} ${height}`);
+
+    const padL = 70, padR = 20, padT = 10, padB = 60, bucketH = 50;
+    const plotW = width - padL - padR;
+    const plotTopH = height - padT - padB - bucketH - 10;
+
+    // When zoomed, the domain must be the exact drag-selected boundary - not just the actual
+    // data's extent within it. Those can differ (the nearest real event is almost always inside
+    // the dragged edge, not exactly on it), and the synthetic watermark anchors below are placed
+    // at exactly zoomRange.start/end - if the domain were tighter than that, they'd plot outside
+    // [0, plotW] entirely. Using zoomRange directly also keeps the next drag's pixel-to-time
+    // mapping (via plotGeom.xInv) anchored to what was actually dragged, so repeated zooms don't
+    // compound a growing mismatch between the two.
+    const minX = zoomRange ? zoomRange.start : chartEvents[0].wallTime;
+    const maxX = zoomRange ? zoomRange.end : chartEvents[chartEvents.length - 1].wallTime;
+    const xSpan = Math.max(1, maxX - minX);
+    const x = (t) => padL + ((t - minX) / xSpan) * plotW;
+    const xInv = (px) => minX + ((px - padL) / plotW) * xSpan;
+
+    const watermarks = chartEvents.filter((e) => e.type === "watermark");
+    const windowFired = chartEvents.filter((e) => e.type === "window_fired");
+    const lateDrops = chartEvents.filter((e) => e.type === "late_drop");
+    const buckets = chartEvents.filter((e) => e.type === "event_bucket");
+
+    // The watermark is a step function - it holds its last value between advances, so zooming
+    // into a window with zero watermark *events* in it shouldn't make the line vanish as long as
+    // an earlier advance already established a value. Carry that value forward as synthetic
+    // anchor points at the zoom boundaries, used only for the line (never for the dots/tooltips,
+    // since no real event happened there).
+    let lineWatermarks = watermarks;
+    if (zoomRange) {
+      lineWatermarks = watermarks.slice();
+      const priorWatermarks = filtered.filter((e) => e.type === "watermark" && e.wallTime < zoomRange.start);
+      if (priorWatermarks.length) {
+        const anchor = priorWatermarks[priorWatermarks.length - 1];
+        lineWatermarks.unshift({ wallTime: zoomRange.start, raw: { watermark: anchor.raw.watermark }, envelope: anchor.envelope });
+      }
+      if (lineWatermarks.length && lineWatermarks[lineWatermarks.length - 1].wallTime < zoomRange.end) {
+        const last = lineWatermarks[lineWatermarks.length - 1];
+        lineWatermarks.push({ wallTime: zoomRange.end, raw: { watermark: last.raw.watermark }, envelope: last.envelope });
+      }
+    }
+
+    const wmValues = lineWatermarks.map((e) => e.raw.watermark)
+      .concat(windowFired.map((e) => e.raw.watermarkAtFire))
+      .concat(lateDrops.map((e) => e.raw.watermarkAtArrival));
+
+    // Time-axis labels always make sense regardless of whether there's watermark data, so draw
+    // them first and unconditionally.
+    for (let i = 0; i <= 6; i++) {
+      const gx = padL + (plotW / 6) * i;
+      const t = minX + (xSpan / 6) * i;
+      const label = svgEl("text", { class: "axis-label", x: gx, y: padT + plotTopH + 16, "text-anchor": "middle" });
+      label.textContent = formatTime(t);
+      chart.appendChild(label);
+    }
+
+    if (wmValues.length === 0) {
+      // No watermark/window_fired/late_drop events to plot a Y-axis against (e.g. an
+      // event_bucket-only file) - say so plainly instead of drawing a meaningless [0,1] range.
+      const msg = svgEl("text", {
+        x: padL + plotW / 2, y: padT + plotTopH / 2, "text-anchor": "middle",
+        fill: "var(--text-dim)", "font-size": "13",
+      });
+      msg.textContent = "No watermark / window_fired / late_drop events in this view to plot.";
+      chart.appendChild(msg);
+    } else {
+      const minY = minOf(wmValues);
+      const maxY = maxOf(wmValues);
+      const ySpan = Math.max(1, maxY - minY);
+      const y = (v) => padT + plotTopH - ((v - minY) / ySpan) * plotTopH;
+
+      for (let i = 0; i <= 5; i++) {
+        const gy = padT + (plotTopH / 5) * i;
+        chart.appendChild(svgEl("line", { class: "gridline", x1: padL, x2: width - padR, y1: gy, y2: gy }));
+        const val = maxY - (ySpan / 5) * i;
+        const label = svgEl("text", { class: "axis-label", x: padL - 8, y: gy + 3, "text-anchor": "end" });
+        label.textContent = formatTime(val);
+        chart.appendChild(label);
+      }
+
+      // watermark step line (drawn from lineWatermarks, which may include synthetic
+      // carry-forward anchors - see above), plus a dot for every single *real* advance. A step
+      // line only ever shows N-1 visible transitions for N points, which undercounts by one vs.
+      // the "watermark advances" stat; the dots make every individual advance visible, not just
+      // the gaps between them.
+      if (lineWatermarks.length > 1) {
+        let d = `M ${x(lineWatermarks[0].wallTime)} ${y(lineWatermarks[0].raw.watermark)}`;
+        for (let i = 1; i < lineWatermarks.length; i++) {
+          d += ` L ${x(lineWatermarks[i].wallTime)} ${y(lineWatermarks[i - 1].raw.watermark)}`;
+          d += ` L ${x(lineWatermarks[i].wallTime)} ${y(lineWatermarks[i].raw.watermark)}`;
+        }
+        chart.appendChild(svgEl("path", { class: "watermark-line", d }));
+      }
+
+      // Dots mark only real events (never the synthetic carry-forward anchors above), drawn
+      // independently of whether there were enough points to also form a line.
+      for (const e of strided(watermarks, MAX_CHART_MARKERS)) {
+        const dot = svgEl("circle", { class: "watermark-dot", cx: x(e.wallTime), cy: y(e.raw.watermark), r: 3 });
+        attachTooltip(dot, `watermark advance\n${formatTime(e.wallTime)} -> watermark=${formatTime(e.raw.watermark)}\noperator=${e.envelope.operator} subtask=${e.envelope.subtask}`);
+        chart.appendChild(dot);
+      }
+
+      // window_fired markers - upward triangle for ON_TIME, downward for LATE_UPDATE, so the
+      // two are distinguishable by shape alone, not just color.
+      for (const e of strided(windowFired, MAX_CHART_MARKERS)) {
+        const cx = x(e.wallTime), cy = y(e.raw.watermarkAtFire);
+        const isLate = e.raw.firing === "LATE_UPDATE";
+        const color = isLate ? "var(--late)" : "var(--ontime)";
+        const d = isLate
+          ? `M ${cx} ${cy + 5} L ${cx + 5} ${cy - 4} L ${cx - 5} ${cy - 4} Z`
+          : `M ${cx} ${cy - 5} L ${cx + 5} ${cy + 4} L ${cx - 5} ${cy + 4} Z`;
+        const tri = svgEl("path", { d, fill: color });
+        attachTooltip(tri, `window_fired (${e.raw.firing})\nkey=${e.raw.key}  window=[${formatTime(e.raw.windowStart)}, ${formatTime(e.raw.windowEnd)})\ncount=${e.raw.count}  watermarkAtFire=${formatTime(e.raw.watermarkAtFire)}`);
+        chart.appendChild(tri);
+      }
+
+      // late_drop markers (diamonds - distinct from the triangles and dots above)
+      for (const e of strided(lateDrops, MAX_CHART_MARKERS)) {
+        const cx = x(e.wallTime), cy = y(e.raw.watermarkAtArrival);
+        const diamond = svgEl("path", {
+          d: `M ${cx} ${cy - 5} L ${cx + 5} ${cy} L ${cx} ${cy + 5} L ${cx - 5} ${cy} Z`,
+          fill: "var(--latedrop)",
+        });
+        attachTooltip(diamond, `late_drop\nkey=${e.raw.key}  eventTime=${formatTime(e.raw.eventTime)}\nwatermarkAtArrival=${formatTime(e.raw.watermarkAtArrival)}  latenessMs=${e.raw.latenessMs}`);
+        chart.appendChild(diamond);
+      }
+    }
+
+    // event_bucket mini bar chart (volume over time). Bar width is a small fixed size, not
+    // derived from the bucket count - the x position (via wallTime) is what aligns each bar
+    // with the main chart; width has nothing to do with how many buckets there are.
+    if (buckets.length) {
+      const maxCount = maxOf(buckets.map((e) => e.raw.count));
+      const barBaseY = height - padB + bucketH + 4;
+      const barW = 6;
+      for (const e of strided(buckets, MAX_CHART_MARKERS)) {
+        const h = (e.raw.count / maxCount) * bucketH;
+        const bar = svgEl("rect", {
+          class: "bucket-bar",
+          x: x(e.wallTime) - barW / 2,
+          y: barBaseY - h,
+          width: barW,
+          height: Math.max(1, h),
+        });
+        attachTooltip(bar, `event_bucket\n${formatTime(e.wallTime)}\ncount=${e.raw.count}  behindWatermark=${e.raw.behindWatermark}\nrange=[${formatTime(e.raw.minEventTime)}, ${formatTime(e.raw.maxEventTime)}]`);
+        chart.appendChild(bar);
+      }
+      const label = svgEl("text", { class: "axis-label", x: padL - 8, y: barBaseY, "text-anchor": "end" });
+      label.textContent = "count";
+      chart.appendChild(label);
+    }
+
+    plotGeom = { xInv, left: padL, right: width - padR, top: padT, bottom: padT + plotTopH };
+  }
+
+  // Drag-to-zoom: mousedown starts a selection rectangle, mousemove resizes it, mouseup commits
+  // it as the new zoomRange (ignoring tiny/accidental drags). Attached once, not per render -
+  // reads the live `plotGeom` set at the end of each renderChart() call instead.
+  (function setupZoomBrush() {
+    let dragStartPx = null;
+    let selectionRect = null;
+
+    function pointerPx(ev) {
+      const rect = chart.getBoundingClientRect();
+      const vb = chart.viewBox.baseVal;
+      if (!rect.width || !vb.width) return null;
+      return (ev.clientX - rect.left) * (vb.width / rect.width);
+    }
+
+    chart.addEventListener("mousedown", (ev) => {
+      if (!plotGeom) return;
+      const px = pointerPx(ev);
+      if (px === null || px < plotGeom.left || px > plotGeom.right) return;
+      dragStartPx = px;
+      selectionRect = svgEl("rect", {
+        class: "zoom-selection", x: px, y: plotGeom.top, width: 0, height: plotGeom.bottom - plotGeom.top,
+      });
+      chart.appendChild(selectionRect);
+    });
+    chart.addEventListener("mousemove", (ev) => {
+      if (dragStartPx === null || !plotGeom) return;
+      const px = Math.min(Math.max(pointerPx(ev), plotGeom.left), plotGeom.right);
+      selectionRect.setAttribute("x", Math.min(dragStartPx, px));
+      selectionRect.setAttribute("width", Math.abs(px - dragStartPx));
+    });
+    window.addEventListener("mouseup", (ev) => {
+      if (dragStartPx === null || !plotGeom) return;
+      const px = Math.min(Math.max(pointerPx(ev), plotGeom.left), plotGeom.right);
+      const widthPx = Math.abs(px - dragStartPx);
+      if (selectionRect) { selectionRect.remove(); selectionRect = null; }
+      if (widthPx > 6) { // ignore accidental tiny drags/clicks
+        zoomRange = { start: plotGeom.xInv(Math.min(dragStartPx, px)), end: plotGeom.xInv(Math.max(dragStartPx, px)) };
+        renderChart();
+      }
+      dragStartPx = null;
+    });
+  })();
+
+  function detailsFor(e) {
+    switch (e.type) {
+      case "watermark":
+        return `watermark=${formatTime(e.raw.watermark)}`;
+      case "event_bucket":
+        return `count=${e.raw.count}, behindWatermark=${e.raw.behindWatermark}, range=[${formatTime(e.raw.minEventTime)}, ${formatTime(e.raw.maxEventTime)}]`;
+      case "window_fired":
+        return `key=${e.raw.key}, window=[${formatTime(e.raw.windowStart)}, ${formatTime(e.raw.windowEnd)}), count=${e.raw.count}, firing=<span class="firing-${e.raw.firing}">${e.raw.firing}</span>`;
+      case "late_drop":
+        return `key=${e.raw.key}, eventTime=${formatTime(e.raw.eventTime)}, latenessMs=${e.raw.latenessMs}`;
+      default:
+        return "";
+    }
+  }
+
+  function renderTable() {
+    const allRows = getFilteredEvents();
+
+    if (allRows.length === 0) {
+      tbody.innerHTML = "";
+      emptyMsg.style.display = "block";
+      tableFooter.hidden = true;
+      return;
+    }
+    emptyMsg.style.display = "none";
+
+    const rows = allRows.slice(0, tableRowLimit);
+    tbody.innerHTML = rows.map((e) => `
+      <tr>
+        <td>${formatTime(e.wallTime)}</td>
+        <td><span class="type-pill type-${e.type}">${e.type}</span></td>
+        <td>${e.envelope.operator}</td>
+        <td>${e.envelope.subtask}</td>
+        <td>${detailsFor(e)}</td>
+      </tr>
+    `).join("");
+
+    const hasMore = rows.length < allRows.length;
+    tableFooter.hidden = !hasMore && allRows.length <= TABLE_PAGE_SIZE;
+    tableFooterText.textContent = hasMore
+      ? `Showing ${rows.length} of ${allRows.length} matching events.`
+      : `Showing all ${allRows.length} matching events.`;
+    showMoreBtn.hidden = !hasMore;
+  }
+
+  window.addEventListener("resize", renderChart);
+})();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>io.github.mthyen</groupId>
+    <artifactId>watermark-lens</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>wmlens-examples</artifactId>
+  <packaging>jar</packaging>
+
+  <name>Watermark Lens :: Examples</name>
+  <description>One runnable Flink job per watermark/windowing concept, instrumented with Watermark Lens.</description>
+
+  <dependencies>
+    <dependency>
+      <groupId>io.github.mthyen</groupId>
+      <artifactId>wmlens-core</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>io.github.mthyen</groupId>
+      <artifactId>wmlens-generator</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.flink</groupId>
+      <artifactId>flink-streaming-java</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.flink</groupId>
+      <artifactId>flink-clients</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.flink</groupId>
+      <artifactId>flink-connector-base</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-api</artifactId>
+    </dependency>
+    <dependency>
+      <!-- A real logging backend, so Flink's own internal logging (checkpoint failures,
+           job manager errors, etc.) is actually visible when running examples - without this,
+           SLF4J falls back to a no-op logger and failures get silently swallowed. -->
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-simple</artifactId>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>exec-maven-plugin</artifactId>
+        <version>3.6.4</version>
+        <configuration>
+          <!-- exec:java runs in-process (same JVM/classloader as Maven itself), which conflicts
+               with how Flink's embedded MiniCluster deserializes a submitted job graph - classes
+               go missing even when they're on the classpath. exec:exec forks a real `java`
+               process instead, matching how you'd actually run this job, so use that goal:
+               `mvn -pl wmlens-examples exec:exec -DmainClass=<fully.qualified.Example>`
+               flink-streaming-java/flink-runtime are "provided" scope (the cluster supplies them
+               in a real deployment), so classpathScope must be widened to "compile" here too. -->
+          <executable>java</executable>
+          <classpathScope>compile</classpathScope>
+          <arguments>
+            <argument>-cp</argument>
+            <classpath/>
+            <argument>${mainClass}</argument>
+          </arguments>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>
